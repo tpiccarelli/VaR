@@ -1,0 +1,68 @@
+Berkowitz.VaR <- function (R, H, alpha, dist){
+  
+  # Definição dos objetos usados no algoritmo:
+  
+  # valores:
+  R_out <- length(R)-8*H+1
+  R_in <- length(R) - R_out
+  Z <- R_out - (H - 1)
+  
+  # vetores:
+  
+  # mu: vetor das médias usadas na geração dos retornos padronizados
+  mu <- array(data = 0, dim = c(Z))
+  
+  # vol: vetor das volatilidades usadas na geração dos retornos padronizados
+  vol <- array(data = 0, dim = c(Z))
+  
+  # r.padr: vetor de retornos padronizados para realização do teste de Berkowitz
+  r.padr <- array(data = 0, dim = c(Z))
+  
+  # shape: parâmero usado se dist = std ou sstd
+  shape <- array(data=0, dim = c(Z))
+  
+  # skew: parâmero usado se dist = std ou sstd
+  skew <- array(data=0, dim = c(Z))
+  
+  # zeta: vetor de retornos padronizados transformados (dado de entrada para teste de Berkowitz)
+  zeta <- array(data = 0, dim = c(length(r.padr)))
+  
+  # Etapa 1: CÁLCULO DA SÉRIE DE RETORNOS PADRONIZADOS (dado de entrada para teste de Berkowitz)
+    
+  for (z in 1:Z) {
+    # "garchFit" retorna a estimação dos parâmetros realizada por modelo da família "ARCH"
+    fit <- garchFit(formula = ~aparch(1,1), data = R[1:(R_in + z - 1)], cond.dist = dist, trace = FALSE)
+    # mu: média usada na geração dos retornos padronizados
+    mu[z] <- coef(fit)[[1]]
+    # vol: volatilidade usada na geração dos retornos padronizados
+    vol[z] <- predict(fit, n.ahead = 1)[[3]]
+    
+    # Definição variável shape no modelo ~aparch(1,1) (usada na etapa 2):
+    if (dist == "std")
+      shape[z] <- coef(fit)[[7]]
+    else if (dist == "sstd"){
+      skew[z]<-coef(fit)[[7]]
+      shape[z] <- coef(fit)[[8]]}
+      
+    # r.orig: série dos retornos originais utilizados
+    r.orig <- R[(length(R) - R_out + 1):(length(R) - (H - 1))]
+    # r.padr: série de retornos padronizados
+    r.padr[z] <- (r.orig[z] - mu[z])/vol[z]
+  }
+  
+  # Etapa 2: TRANSFORMAÇÃO DOS RETORNOS PADRONIZADOS
+  for (i in 1:length(r.padr)){
+    if(dist=="norm")
+    zeta[i] <- qnorm(pnorm(r.padr[i]))
+    else if(dist=="std")
+    zeta[i] <- qnorm(pstd(r.padr[i], nu = shape[i]))
+    else
+    zeta[i] <- qnorm(psstd(r.padr[i], nu = shape[i],xi = skew[i]))  
+  }
+  
+  # Etapa 3: TESTE DE BERKOWITZ
+  tBkw <- BerkowitzTest(data = zeta, tail.test = TRUE, alpha = alpha)
+  
+  # Resultados:
+  result.tBerkowitz <<- list(tBkw, zeta, r.orig, mu, vol, r.padr)
+}
