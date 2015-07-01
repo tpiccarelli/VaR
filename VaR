@@ -1,0 +1,154 @@
+VaR <- function(N, H, AAAAMM, modelo, dist, alpha, exp){
+
+    # Carregar packages:
+    
+    library(fGarch)
+    library(FitAR)
+    library(FitARMA)
+    library(quantmod)
+    library(rugarch)
+    
+    retornos <- scan(file=paste0("Z:/DPTO/GERIC 3/VaR Ações/Planilhas/Var_Dados Diários/Retornos/Novo Critério/Retornos_", AAAAMM, ".csv"))
+        
+    # N: n iteracoes na simulacao de Monte Carlo
+    # H: n passos a frente na estimaca do VaR
+    # R: serie historica completa
+    # R_out: tamanho da serie fora da amostra (=length(R) - 8*H)
+    # modelo: processo estocastico utilizado: ~GARCH (1,1) ou ~APARCH (1,1)
+    # dist: distribuicao condicional dos retornos: "norm" (normal-padrao) , "std" (t-student) ou "sstd" (t-student assimetrica)
+    # alpha: nivel de significancia adotado na previsao do VaR
+    # exp: transformacao exponencial do VaR (=T)
+    
+        # N=1000 (nº iterações simulação Monte Carlo)
+        # H=63 (63: nº dias úteis por trimestre)
+        k=8*H # =R_in
+        R_out=length(retornos)-k
+        
+        # DEFINIÇÃO DE VARIÁVEIS:
+        
+        # Z: nº estimações
+        Z=R_out-1
+        
+        # R_sim: matriz de retornos simulados um passo a frente
+        R_sim <- array(data=0 , dim=c(N,H))
+        
+        # VaR: vetor VaR estimado 63 dias a frente
+        VaR <- array(data=0 , dim=c(Z))
+
+        # sigma_sim: matriz de volatilidades atualizadas
+        sigma_sim <- array(data=0 , dim=c(N,H))
+        
+        # vol: vetor de volatilidades estimadas
+        vol <- array(data=0 , dim=c(Z))
+        
+        # length_coefs: tamanho da matriz de coeficientes
+            # depende do modelo e da distribuicao
+            # numero minimo de coeficientes = 4 (modelo GARCH com distribuicao condicional normal)
+        length_coefs == 4
+        
+        if (modelo == ~aparch(1,1))
+            length_coefs <- length_coefs + 2
+        if (dist == "std")
+            length_coefs <- length_coefs + 1
+        if (dist == "sstd")
+            length_coefs <- length_coefs + 2
+        
+        # coefs: matriz de coeficientes das estimacoes
+        coefs <- array(data=0, dim=c(Z,length_coefs))
+        
+        # eps_sim: vetor aleatorio Normal-Padrao (mean=0, sd=1) de tamanho N x H
+        if (dist=="norm")
+            eps_sim <- rnorm(n=N*H)
+        # eps_sim: vetor aleatorio t-student de tamanho N x H, com numero de graus de liberdade (nu) estimado
+        if (dist=="std")
+            eps_sim <- rstd(n=N*H, nu=shape)
+        # eps_sim: vetor aleatorio t-student assimetrico de tamanho N x H, com numero de graus de liberdade (nu) e coeficiente de assimetria (xi) estimados
+        if (dist=="sstd")
+            eps_sim <- rsstd(n=N*H, nu=shape, xi=skew)
+        
+        # R_H_sim: distribuicao dos retornos simulados "H" passos a frente para cada observacao "z" fora da amostra
+        R_H_sim <- array(data=0, dim=c(Z,N))
+        
+        # ret.pad: vetor de retornos padronizados (BERKOWITZ)
+        # ret.pad <- array(data=0 , dim=c(Z))
+        
+        # data_bkw: vetor de dados utilizados para o teste de Berkowitz
+        # data_bkw <- array(data=0, dim=c(Z))
+        
+        # z: contador do numero de estimacoes
+        for(z in 1:Z){
+            
+            # “garchFit” retorna a estimação dos parâmetros realizada por modelo da família “ARCH”
+            params <- garchFit(formula=modelo, data=retornos[1:(z+k-1)], cond.dist=dist, trace=FALSE)
+
+            # Definição de parâmetros
+            mu <- coef(params)[[1]]
+            omega <- coef(params)[[2]]
+            alpha1 <- coef(params)[[3]]
+            
+            # Caso APARCH (1,1)
+            if (modelo == ~aparch(1,1)){
+                gamma1 <- coef(params)[[4]]
+                beta1 <- coef(params)[[5]]
+                delta <- coef(params)[[6]]
+            
+            # Definição de parâmetros para distribuição std
+                if (dist == "std")
+            # shape: parâmetro dos graus de liberdade
+                    shape <- coef(params)[[7]]
+            
+            # Definição de parâmetros para distribuição sstd
+                if (dist == "sstd"){
+            # skew: vetor do parâmetro de tendência de assimetria em relação à distribuição normal
+                    skew <- coef(params)[[7]]
+                    shape <- coef(params)[[8]]
+                }
+            }
+            
+            # Caso GARCH (1,1)
+            if (modelo==~garch(1,1)){
+                beta1 <- coef(params)[[4]]
+                gamma1 == 0
+                delta == 2
+                
+                if (dist=="std")
+                    shape <- coef(params)[[5]]
+                if (dist=="sstd") {
+                    skew<- coef(params)[[5]]
+                    shape <- coef(params)[[6]]
+                }
+            }
+            
+            # Estimação da volatilidade um passo a frente 
+            vol[z] <- predict(params, n.ahead=1)[[3]]
+            
+            # i: contador do numero de iteracoes na simulacao de Monte Carlo
+            for (i in 1:N){
+                # h: contador do numero de passos a frente na estimacao do VaR
+                for (h in 1:H) {
+                    if (h==1)
+                        sigma_sim[i,h] <- vol[z]
+                    else
+                        sigma_sim[i,h] <- (omega + alpha1*((abs(R_sim[i,h-1]-mu) - gamma1*(R_sim[i,h-1]-mu))^delta) + beta1*(sigma_sim[i,h-1]^delta))^(1/delta)
+                    
+                    R_sim[i,h] <- mu + sigma_sim[i,h] * eps_sim[i + (h-1)*N]
+                    R_H_sim[z,i] <- R_H_sim[z,i] + R_sim[i,h]
+                }
+            }
+            
+            VaR[z] <- quantile(R_H_sim[z,], probs=alpha)
+            coefs[z,] <- coef(params)
+        }
+        
+        # exp==TRUE: funcao retorna a transformacao exponencial do VaR
+        if (exp == T)
+            VaR <- exp(VaR)-1
+        
+        # a funcao retorna quatro elementos: o vetor de previsoes do VaR, a matriz de coeficientes estimados, o vetor de volatilidades estimadas e a matriz com realizacoes da previsao do retorno "H" passos a frente para cada dia fora da amostra
+        lista <- list(VaR = VaR, Coeficientes = coefs, Volatilidade = vol, R_H_sim = R_H_sim)
+        save(lista, file = paste0("I:/DERIC/DPTO/GERIC 3/VaR Ações/Planilhas/Var_Dados Diários/Retornos/Análises/VaR_", AAAAMM, "_", dist, ".RData"))
+        # return(lista)
+
+        # Consolida dados VaR em arquivo .csv
+        write.csv(VaR, file = paste0("I:/DERIC/DPTO/GERIC 3/VaR Ações/Planilhas/Var_Dados Diários/Retornos/Análises/VaR_", dist, "_", AAAAMM, ".csv"))
+}
